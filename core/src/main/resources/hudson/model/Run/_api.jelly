@@ -52,9 +52,21 @@ THE SOFTWARE.
     The response will contain a chunk of the console output, as well as the <code>X-Text-Size</code> header that represents
     the bytes offset (of the raw log file).
     This is the number you want to use as the <code>start</code> parameter for the next call.
+    The header <code>X-ConsoleAnnotator</code> needs to be copied to the next call in order to resume console annotations.
   </p><p>
     If the response also contains the <code>X-More-Data: true</code> header, the server is indicating that the build
     is in progress, and you need to repeat the request after some delay. The Jenkins UI waits 5 seconds before making
     the next call. When this header is not present, you know that you've retrieved all the data and the build is complete.
+  </p><p>
+    Streaming/unbuffered variant: Add header <code>X-Streaming: true</code>.
+    The response will include the header <code>X-Streaming: true</code> and the body includes a final new line with metadata of the emitted log:
+    <code>...log text...\n{"completed":true,"start":42,"end":1337,"consoleAnnotator":"..."}</code>
+    <ul>
+      <li><code>completed</code> is the inverse of <code>X-More-Data</code></li>
+      <li><code>start</code> is the determined start when using <code>?start=-1000</code> for tailing the last n bytes</li>
+      <li><code>end</code> is equivalent to <code>X-Text-Size</code></li>
+      <li><code>consoleAnnotator</code> is equivalent to <code>X-ConsoleAnnotator</code></li>
+    </ul>
+    Streaming uses larger disk reads (16kiB instead of 1KiB) and does not normalize line endings to CRLF (previously needed for for Internet Explorer).
   </p>
 </j:jelly>

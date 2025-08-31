@@ -23,6 +23,7 @@ Behaviour.specify(
     function fetchNext(e, href, onFinishEvent) {
       var headers = crumb.wrap({
         "Content-Type": "application/x-www-form-urlencoded",
+        "X-Streaming": "true",
       });
       if (e.consoleAnnotator !== undefined) {
         headers["X-ConsoleAnnotator"] = e.consoleAnnotator;
@@ -62,6 +63,19 @@ Behaviour.specify(
         /* append text and do autoscroll if applicable */
         rsp.text().then((responseText) => {
           var text = responseText;
+          var completed;
+          if (rsp.headers.get("X-Streaming") === "true") {
+            var idx = responseText.lastIndexOf("\n");
+            var meta = JSON.parse(responseText.slice(idx + 1));
+            text = responseText.slice(0, idx);
+            e.fetchedBytes = meta.end;
+            e.consoleAnnotator = meta.consoleAnnotator;
+            completed = meta.completed;
+          } else {
+            e.fetchedBytes = rsp.headers.get("X-Text-Size");
+            e.consoleAnnotator = rsp.headers.get("X-ConsoleAnnotator");
+            completed = rsp.headers.get("X-More-Data") !== "true";
+          }
           if (text !== "") {
             var p = document.createElement("DIV");
             e.appendChild(p); // Needs to be first for IE
@@ -71,10 +85,7 @@ Behaviour.specify(
               scroller.scrollToBottom();
             }
           }
-
-          e.fetchedBytes = rsp.headers.get("X-Text-Size");
-          e.consoleAnnotator = rsp.headers.get("X-ConsoleAnnotator");
-          if (rsp.headers.get("X-More-Data") === "true") {
+          if (!completed) {
             setTimeout(function () {
               fetchNext(e, href, onFinishEvent);
             }, 1000);

@@ -26,9 +26,9 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URL;
 import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.Future;
 import jenkins.model.Jenkins;
+import net.sf.json.JSONObject;
 import org.htmlunit.Page;
 import org.htmlunit.TextPage;
 import org.htmlunit.WebRequest;
@@ -147,28 +147,41 @@ public class ConsoleAnnotatorTest {
     class ProgressiveLogClient {
         JenkinsRule.WebClient wc;
         Run run;
+        boolean streaming;
 
         String consoleAnnotator;
         String start;
         private Page p;
 
-        ProgressiveLogClient(JenkinsRule.WebClient wc, Run r) {
+        ProgressiveLogClient(JenkinsRule.WebClient wc, Run r, boolean streaming) {
             this.wc = wc;
             this.run = r;
+            this.streaming = streaming;
         }
 
         String next() throws IOException {
             WebRequest req = new WebRequest(new URL(r.getURL() + run.getUrl() + "/logText/progressiveHtml" + (start != null ? "?start=" + start : "")));
             req.setEncodingType(null);
-            Map headers = new HashMap();
+            HashMap<String, String> headers = new HashMap<>();
             if (consoleAnnotator != null)
                 headers.put("X-ConsoleAnnotator", consoleAnnotator);
+            if (streaming) headers.put("X-Streaming", "true");
             req.setAdditionalHeaders(headers);
 
             p = wc.getPage(req);
-            consoleAnnotator = p.getWebResponse().getResponseHeaderValue("X-ConsoleAnnotator");
-            start = p.getWebResponse().getResponseHeaderValue("X-Text-Size");
-            return p.getWebResponse().getContentAsString();
+            String content = p.getWebResponse().getContentAsString();
+            if (streaming) {
+                var metaStart = content.lastIndexOf('\n');
+                var metaRaw = content.substring(metaStart + 1);
+                var meta = JSONObject.fromObject(metaRaw);
+                content = content.substring(0, metaStart);
+                consoleAnnotator = meta.getString("consoleAnnotator");
+                start = meta.getString("end");
+            } else {
+                consoleAnnotator = p.getWebResponse().getResponseHeaderValue("X-ConsoleAnnotator");
+                start = p.getWebResponse().getResponseHeaderValue("X-Text-Size");
+            }
+            return content;
         }
 
     }
@@ -179,6 +192,15 @@ public class ConsoleAnnotatorTest {
      */
     @Test
     void progressiveOutput() throws Exception {
+        progressiveOutputWith(false, "\r\n");
+    }
+
+    @Test
+    void progressiveOutputStreaming() throws Exception {
+        progressiveOutputWith(true, "\n");
+    }
+
+    void progressiveOutputWith(boolean streaming, String crlf) throws Exception {
         final SequenceLock lock = new SequenceLock();
         JenkinsRule.WebClient wc = r.createWebClient();
         FreeStyleProject p = r.createFreeStyleProject();
@@ -200,16 +222,17 @@ public class ConsoleAnnotatorTest {
 
         lock.phase(1);
         FreeStyleBuild b = p.getBuildByNumber(1);
-        ProgressiveLogClient plc = new ProgressiveLogClient(wc, b);
+        ProgressiveLogClient plc = new ProgressiveLogClient(wc, b, streaming);
         // the page should contain some output indicating the build has started why and etc.
-        plc.next();
+        var preamble = plc.next();
+        assertEquals(false, preamble.isEmpty());
 
         lock.phase(3);
-        assertEquals("<b tag=1>line1</b>\r\n", plc.next());
+        assertEquals("<b tag=1>line1</b>" + crlf, plc.next());
 
         // the new invocation should start from where the previous call left off
         lock.phase(5);
-        assertEquals("<b tag=2>line2</b>\r\n", plc.next());
+        assertEquals("<b tag=2>line2</b>" + crlf, plc.next());
 
         lock.done();
 
@@ -217,7 +240,7 @@ public class ConsoleAnnotatorTest {
         r.assertBuildStatusSuccess(f);
     }
 
-    @TestExtension("progressiveOutput")
+    @TestExtension({"progressiveOutput", "progressiveOutputStreaming"})
     public static final ConsoleAnnotatorFactory STATEFUL_ANNOTATOR = new ConsoleAnnotatorFactory() {
         @Override
         public ConsoleAnnotator newInstance(Object context) {
@@ -247,6 +270,18 @@ public class ConsoleAnnotatorTest {
      */
     @Test
     void consoleAnnotation() throws Exception {
+        consoleAnnotationWith(false, "\r\n");
+    }
+
+    @Test
+    void consoleAnnotationStreaming() throws Exception {
+        consoleAnnotationWith(true, "\n");
+    }
+
+    /**
+     * Place {@link ConsoleNote}s and make sure it works.
+     */
+    void consoleAnnotationWith(boolean streaming, String crlf) throws Exception {
         final SequenceLock lock = new SequenceLock();
         JenkinsRule.WebClient wc = r.createWebClient();
         FreeStyleProject p = r.createFreeStyleProject();
@@ -277,14 +312,14 @@ public class ConsoleAnnotatorTest {
         // discard the initial header portion
         lock.phase(1);
         FreeStyleBuild b = p.getBuildByNumber(1);
-        ProgressiveLogClient plc = new ProgressiveLogClient(wc, b);
+        ProgressiveLogClient plc = new ProgressiveLogClient(wc, b, streaming);
         plc.next();
 
         lock.phase(3);
-        assertEquals("abc$$$def\r\n", plc.next());
+        assertEquals("abc$$$def" + crlf, plc.next());
 
         lock.phase(5);
-        assertEquals("123$$$456$$$789\r\n", plc.next());
+        assertEquals("123$$$456$$$789" + crlf, plc.next());
 
         lock.done();
 

@@ -39,6 +39,7 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -215,14 +216,13 @@ public class AnnotatedLargeText<T> extends LargeText {
         return isHtml(req);
     }
 
-    /**
-     * Strips annotations using a {@link PlainTextConsoleOutputStream}.
-     * {@inheritDoc}
-     */
     @CheckReturnValue
     @Override
     public long writeLogTo(long start, OutputStream out) throws IOException {
-        return super.writeLogTo(start, new PlainTextConsoleOutputStream(out));
+        if (isHtml())
+            return writeHtmlTo(start, new OutputStreamWriter(out, StandardCharsets.UTF_8));
+        else
+            return super.writeLogTo(start, new PlainTextConsoleOutputStream(out));
     }
 
     /**
@@ -236,8 +236,11 @@ public class AnnotatedLargeText<T> extends LargeText {
 
     @CheckReturnValue
     public long writeHtmlTo(long start, Writer w) throws IOException {
+        StaplerRequest2 req = Stapler.getCurrentRequest2();
+        StaplerResponse2 rsp = Stapler.getCurrentResponse2();
+        boolean streaming = req != null && "true".equals(req.getHeader("X-Streaming"));
         ConsoleAnnotationOutputStream<T> caw = new ConsoleAnnotationOutputStream<>(
-                w, createAnnotator(Stapler.getCurrentRequest2()), context, charset);
+                w, createAnnotator(req), context, charset);
         long r = super.writeLogTo(start, caw);
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -246,9 +249,12 @@ public class AnnotatedLargeText<T> extends LargeText {
         oos.writeLong(System.currentTimeMillis()); // send timestamp to prevent a replay attack
         oos.writeObject(caw.getConsoleAnnotator());
         oos.close();
-        StaplerResponse2 rsp = Stapler.getCurrentResponse2();
-        if (rsp != null)
-            rsp.setHeader("X-ConsoleAnnotator", Base64.getEncoder().encodeToString(baos.toByteArray()));
+        String state = Base64.getEncoder().encodeToString(baos.toByteArray());
+        if (streaming) {
+            setStreamingMeta("consoleAnnotator", state);
+        } else if (rsp != null) {
+            rsp.setHeader("X-ConsoleAnnotator", state);
+        }
         return r;
     }
 
